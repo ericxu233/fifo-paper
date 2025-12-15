@@ -1,0 +1,72 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% This is the template for submission to MICRO 2024
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage[hyphens]{url}
+\usepackage{fancyhdr}
+\usepackage[bookmarks=true,breaklinks=true,letterpaper=true,colorlinks,citecolor=blue,linkcolor=blue,urlcolor=blue]{hyperref}
+\usepackage{listings}
+\usepackage{subcaption}
+
+%-----------------------------------------------------------------------------
+
+\newcommand{\RNum}[1]{\uppercase\expandafter{\romannumeral #1\relax}}
+
+% Set graphics path to figures folder
+\graphicspath{{./figures/}}
+
+% Ensure letter paper
+\pdfpagewidth=8.5in
+\pdfpageheight=11in
+
+%%%%%%%%%%%---SETME-----%%%%%%%%%%%%%
+\newcommand{\microsubmissionnumber}{NaN}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\pagenumbering{arabic}
+
+%-----------------------------------------------------------------------------
+%%% Top matter
+
+%%%%%%%%%%%---SETME-----%%%%%%%%%%%%%
+\title{Enabling Efficient Support of Loop-carried Dependences on Spatial CGRAs with FIFO Initialization} 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\author{
+\IEEEauthorblockN{Hanyang (Eric) Xu}
+\IEEEauthorblockA{
+University of Toronto \\
+hyeric.xu@mail.utoronto.ca}
+}
+
+%-----------------------------------------------------------------------------
+
+\begin{document}
+\maketitle
+
+\pagestyle{plain}
+
+%%%%%% -- PAPER CONTENT STARTS-- %%%%%%%%
+
+\input{introduction}
+\input{background}
+\input{motivation}
+\input{fifoinit}
+\input{optimization}
+\input{compiler}
+
+%%%%%%% -- PAPER CONTENT ENDS -- %%%%%%%%
+
+%%%%%%%%% -- BIB STYLE AND FILE -- %%%%%%%%
+\bibliographystyle{IEEEtranS}
+\bibliography{refs}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\end{document}

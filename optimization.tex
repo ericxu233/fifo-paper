@@ -1,0 +1,244 @@
+\section{Optimizations with FIFO Initialization}
+\label{sec:optimization}
+This section details the compiler transformations enabled by FIFO initialization. By utilizing the PE FIFO units for initialization values, we decouple the handling of loop-carried dependences from compute resources. This allows the compiler to exploit reuse patterns and recurrence acceleration techniques more effectively, minimizing PE overhead while maximizing throughput.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.4\linewidth]{vanilla-d.png}
+    \caption{DFG for simple reduction}
+    \label{fig:vanilla-d}
+\end{figure}
+
+In the DFGs presented throughout this section, we adopt a specific notation to represent initialized states. Edges annotated with the label $d=n$ (e.g., $d=1$, $d=3$) indicate a FIFO channel that is pre-loaded with $n$ data values during configuration. For example, Figure~\ref{fig:vanilla-d} presents a simple reduction DFG where the reduction ADD node has its feedback edge labeled $d=1$ to indicate it has been initialized by an initial value. Additionally, this initialization count $n$ directly corresponds to the dependence distance of the loop-carried dependences.
+
+\subsection{Data Reuse with FIFO Channels}
+With the ability of FIFO initialization, we can now apply the sliding window optimization in a more PE-efficient manner. As illustrated in Section~\ref{subsec:reductions}, the sliding-window optimization performs carrying values across iterations to reduce memory bandwidth pressure.
+
+In the traditional approach shown in Figure~\ref{fig:jacobi-1d-opt-dfg}, this data movement is implemented using PHI nodes that act as explicit reuse registers, consuming one PE for every step of the reuse distance.
+
+By leveraging FIFO initialization, we map these reuse register chains directly onto the PE FIFOs of the user rather than utilizing full compute PEs for each reuse register. For the Jacobi-1d example, instead of allocating two PEs to serve as the \texttt{reuse1} and \texttt{reuse2} registers, we route the data dependencies directly from the source to the consumer PEs.
+To ensure the correct alignment of data across iterations, we initialize the input FIFOs of the consumer PE with the boundary values (e.g., \texttt{a[0]} and \texttt{a[1]} from Figure~\ref{fig:jacobi-1d-opt}) during the configuration phase. The resulting DFG of the sliding-window optimization with FIFO initialization is presented in Figure~\ref{fig:fifo-init-jacobi}. Consequently, the two PHI nodes in Figure~\ref{fig:jacobi-1d-opt-dfg} are eliminated, reducing the PE usage for the optimized Jacobi-1d kernel from seven PEs to five PEs.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{fifo-init-jacobi.png}
+    \caption{DFG of Facobi2d After Fifo Initialization}
+    \label{fig:fifo-init-jacobi}
+\end{figure}
+
+
+\subsection{Enabling 2D Reuse via Tiling and Flattening}
+\label{subsec:2d-reuse}
+We can extend the sliding-window optimization to two-dimensional patterns, such as a $3\times3$ convolutional kernel as shown in Figure~\ref{fig:vanilla_conv}. In this scenario, data reuse opportunities exist not only horizontally within rows but also vertically across columns. Theoretically, for a $3\times3$ kernel, a single memory load at the bottom-right corner of the window ($input[i+1][j+1]$) can be reused 8 times across subsequent window positions as the kernel slides horizontally and vertically.
+To exploit this on a spatial architecture, the hardware must implement \textit{line buffers}---chains of storage capable of holding pixels from previous rows to facilitate vertical reuse.
+
+\begin{figure}[h!]
+    \centering
+    \begin{lstlisting}[language=C, basicstyle=\ttfamily\small, frame=single, captionpos=b]
+// Vanilla 3x3 Convolution
+for (int i = 1; i < Height - 1; ++i) {
+  for (int j = 1; j < Width - 1; ++j) {
+    float sum = 0.0f;
+    sum += w[0]*input[i-1][j-1] + 
+           w[1]*input[i-1][j] +
+           w[2]*input[i-1][j+1];
+    sum += w[3]*input[i][j-1] + 
+           w[4]*input[i][j] +
+           w[5]*input[i][j+1];
+    sum += w[6]*input[i+1][j-1] + 
+           w[7]*input[i+1][j] +
+           w[8]*input[i+1][j+1];
+
+    output[i][j] = sum;
+  }
+}
+    \end{lstlisting}
+    \caption{Vanilla 3x3 Convolution Kernel}
+    \label{fig:vanilla_conv}
+\end{figure}
+
+However, on a spatial elastic CGRA, the capacity for buffering is determined by the depth of the PE FIFO channels.
+For a standard high-resolution image, the reuse distance for vertical dependencies is equal to the image width, which far exceeds the typical FIFO depths available on CGRAs (e.g., depth of 4 to 16) \cite{aihara2025impact}. This forces the compiler to spill data back to memory, losing the reuse opportunity.
+
+To address this, we apply loop tiling to the image columns. By partitioning the image width into narrow vertical strips (tiles), we reduce the reuse distance from the full image width to the tile width. If the tile width is chosen such that the required line buffers fit within the available FIFO and PE resources, we can sustain the theoretical maximum reuse. Additionally, to ensure all data accesses are reused coherently, we must flatten the tiled loops into a single continuous execution stream that operates in a wrap-around fashion. In this setup, the execution logically wraps from the end of one vertical strip to the start of the next, treating the tiled image as one continuous sequence. FIFO initialization would pre-load the "halo" (the boundary pixels from the previous row or tile) into the reuse FIFOs at the start of each tile execution.
+
+The transformed code structure is shown in Figure~\ref{fig:tiled_conv}. The inner loop iterates over a tile width small enough to fit the reuse chain in hardware FIFOs. FIFO initialization can now be applied to eliminate most loop-variant loads from \texttt{input[tj][i-W-1]} to \texttt{input[tj][i+W]} by only loading \texttt{input[tj][i+W+1]} from memory and propagating this value through the initialized reuse chain to satisfy the remaining operand dependencies.
+
+\begin{figure}[h!]
+    \centering
+    \begin{lstlisting}[language=C, basicstyle=\ttfamily\small, frame=single, captionpos=b]
+// Tiled 3x3 Convolution
+// Modified the input data to be 
+// sliced (tiled) up and flattened
+for (int tj=0; tj<SLICES; tj+=1) {
+  for (int i=W+1; i<Height-W-1; ++i) {
+    float sum = 0.0f;
+    sum += w[0]*input[tj][i-W-1] + 
+           w[1]*input[tj][i-W] +
+           w[2]*input[tj][i-W+1];
+    sum += w[3]*input[tj][i-1] + 
+           w[4]*input[tj][i] +
+           w[5]*input[tj][i+1];
+    sum += w[6]*input[tj][i+W-1] + 
+           w[7]*input[tj][i+W] +
+           w[8]*input[tj][i+W+1];
+
+    output[slice][i] = sum;
+  }
+}
+    \end{lstlisting}
+    \caption{Tiled convolution kernel enabling 2D data reuse within limited FIFO resources.}
+    \label{fig:tiled_conv}
+\end{figure}
+
+\subsection{Increase Recurrence Pipelining with Look-ahead Expansion}
+As shown in Section~\ref{sec:chandmotiv}, reductions and linear recurrence executed without specialized support cannot be pipelined, resulting in low throughput. The reason is that each newly computed result is immediately required by the next loop iteration to produce the next result. In other words, the dependence distance is one. This tight dependence serializes the computation that prevents effective pipelining. A common way to mitigate this limitation is through a technique known as \textit{look-ahead expansion} \cite{kogge1973parallel, parhi1989pipeline}.
+
+Recurrences such as reductions and linear recurrences can be formally expressed by recurrence relations. A simple reduction can be written in code as:
+
+\begin{figure}[h!] % The figure environment
+    \centering % To center the code block
+    \begin{lstlisting}[language=C, basicstyle=\ttfamily\small, frame=single, captionpos=b]
+float y = 0.0f;
+for (int n = 0; n < N; ++n) {
+    y += x[n];
+}
+    \end{lstlisting}
+    \caption{C code for simple reduction for loop}
+    \label{fig:sum_code}
+\end{figure}
+
+The reduction of this code has a throughput of $T=1/4$ since the dependence distance is one and the feedback-cycle latency is four. If we were to map this onto a CGRA, then the CGRA would only produce a result every four cycles.
+
+Mathematically, this recurrence is expressed as
+\begin{equation}
+y(n) = y(n-1) + x(n).
+\end{equation}
+
+We can substitute $y(n-1)$ with its own recurrence:
+\begin{equation}
+y(n-1) = y(n-2) + x(n-1).
+\end{equation}
+
+Substituting this into the original expression gives:
+\begin{align}
+y(n) &= y(n-2) + x(n-1) + x(n).
+\end{align}
+
+Continuing this process for $y(n-2)$ and $y(n-3)$ would yield:
+\begin{align}
+y(n) &= y(n-4) + x(n-3) + x(n-2) + x(n-1) + x(n)
+\end{align}
+
+and so on. This unfolding illustrates the principle of look-ahead expansion. By substituting earlier terms, a dependence on $y(n-1)$ can be transformed into a dependence on $y(n-k)$ with a look-ahead expansion of k steps, thereby increasing the dependence distance. Larger dependence distances enable pipelining, since multiple iterations can now be computed in parallel. However, the loop now requires the first k values to be pre-computed, which is accomplished by peeling the first k iterations from the original loop. The transformed code for the resulting equation (5) is shown:
+
+\begin{figure}[h!] % The figure environment
+    \centering % To center the code block
+    \begin{lstlisting}[language=C, basicstyle=\ttfamily\small, frame=single, captionpos=b]
+float y = 0.0f;
+float reg0 = x[0];
+float reg1 = reg0 + x[1];
+float reg2 = reg1 + x[2];
+float reg3 = reg2 + x[3];
+for (int n = 4; n < N; ++n) {
+    y = reg0 + x[n-3] + x[n-2] + x[n-1] + x[n];
+    reg0 = reg1;
+    reg1 = reg2;
+    reg2 = reg3;
+    reg3 = y;
+}
+    \end{lstlisting}
+    \caption{C code reduction loop after look-ahead expansion}
+    \label{fig:sum_code_expanded}
+\end{figure}
+
+The original DFG and the transformed DFG is shown in Figure~\ref{fig:lcreduction}. The overlapping memory accesses displayed in the transformed code from Figure~\ref{fig:sum_code_expanded} have been optimized with data reuse. The new DFG now has the same feedback latency as before, but now the dependence distance is increased to four by FIFO initialization and look-ahead expansion. Thus, the throughput of this DFG is $T=4/4=1$ iters/cycle, yielding a $4\times$ speedup over the original DFG. This transformed DFG, when exectued on a CGRA, would be perfectly pipelined, producing a new result in every cycle.
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=0.7\linewidth]{lookahead_reduction.png}
+    \caption{Look ahead transform for the reduction loop before (right) and after (left)}
+    \label{fig:lcreduction}
+\end{figure}
+
+Linear recurrences can be expanded in the same way, but now coefficients are involved. For example, the linear recurrence in Figure~\ref{fig:linrec-dfg} can be expressed as:
+\begin{equation}
+y_n = \alpha y_{n-1} + x_n.
+\end{equation}
+
+Applying one step of look-ahead gives:
+\begin{equation}
+y_n = \alpha^2 y_{n-2} + \alpha x_{n-1} + x_n.
+\end{equation}
+
+In general, the $k$-step look-ahead expansion is:
+\begin{equation}
+y_n = \alpha^{k+1} y_{n-1-k} + \sum_{i=0}^{k} \alpha^i x_{n-i}.
+\end{equation}
+
+Here, the recurrence depends on $y_{n-k}$ instead of $y_{n-1}$, increasing the recurrence distance to $k$. An example DFG transformation of the same linear recurrence is given in Figure~\ref{fig:linreclcdfg} with a look-ahead expansion of eight steps. The original DFG is shown on the left, and the transformed DFG is shown on the right. If we assume a combined feedback latency of eight cycles for the multiply–add path, then we yield a throughput of $T=1/8$ iters/cycle. With the transformed DFG on the right, the dependence distance increases to eight, giving an $8\times$ improvement in throughput to $T=8/8=1$ iters/cycle.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1 \linewidth]{naivelook.png}
+    \caption{Look-ahead expansion for linear recurrences}
+    \label{fig:linreclcdfg}
+\end{figure}
+
+\subsection{Recursive Doubling}
+If we observe the resulting DFGs from Figure~\ref{fig:lcreduction} and Figure~\ref{fig:linreclcdfg}, we can see that the look-ahead expansion technique has an overhead of an additional $O(n)$ PEs for reductions and $O(2n)$ PEs for linear recurrences, where $n$ is the number of look-ahead steps. This overhead is high. The original linear recurrence requires only four PEs, but the optimized linear recurrence with look-ahead expansion requires 19 PEs. Though this may seem like a good bargain for $8\times$ througput, a 19-PE footprint is significant on CGRAs that typically provide only a few dozen. As the recurrence grows more complex or the feedback latency increases, the pressure on PE resources scales correspondingly. In addition, the top-level memory load must fan out to many consumer PEs, which stresses CGRA interconnects. This may exceed the supported fan-out size on some CGRA architectures and will significantly increase the complexity of CGRA mapping.
+
+
+\textit{Recursive doubling} is a technique that helps reduce the complexity of look-ahead expansion \cite{kogge1973parallel, parhi1989pipeline}. Its core idea is still the same, but it reuses the partial sums/products from previous instances when computing recurrences. Consider the linear recurrence with the look-ahead expansion of 7 steps with a few iterations unfolded:
+
+\begin{equation}
+\begin{split}
+y_n &= \alpha^{8} y_{n-8} + \alpha^{7}x_{n-7} \\
+    &\quad + \alpha^{6}x_{n-6} + \alpha^{5}x_{n-5} + \alpha^{4}x_{n-4} \\
+    &\quad + \alpha^{3}x_{n-3} + \alpha^{2}x_{n-2} + \alpha x_{n-1} + x_n
+\end{split}
+\end{equation}
+
+\begin{equation}
+\begin{split}
+y_{n+2} &= \alpha^{8} y_{n-6} + \alpha^{7}x_{n-5} \\
+    &\quad + \alpha^{6}x_{n-4} + \alpha^{5}x_{n-3} + \alpha^{4}x_{n-2} \\
+    &\quad + \alpha^{3}x_{n-1} + \alpha^{2}x_{n} + \alpha x_{n+1} + x_{n+2}.
+\end{split}
+\end{equation}
+
+\begin{equation}
+\begin{split}
+y_{n+3} &= \alpha^{8} y_{n-5} + \alpha^{7}x_{n-4} \\
+    &\quad + \alpha^{6}x_{n-3} + \alpha^{5}x_{n-2} + \alpha^{4}x_{n-1} \\
+    &\quad + \alpha^{3}x_{n} + \alpha^{2}x_{n+1} + \alpha x_{n+2} + x_{n+3}.
+\end{split}
+\end{equation}
+
+\begin{equation}
+\begin{split}
+y_{n+4} &= \alpha^{8} y_{n-4} + \alpha^{7}x_{n-3} \\
+    &\quad + \alpha^{6}x_{n-2} + \alpha^{5}x_{n-1} + \alpha^{4}x_{n} \\
+    &\quad + \alpha^{3}x_{n+1} + \alpha^{2}x_{n+2} + \alpha x_{n+3} + x_{n+4}.
+\end{split}
+\end{equation}
+
+We can clearly see that the input contributions involving $x_{n-k}...x_{n-k+7}$ are computed in a sliding window fashion. This results in plenty of partial sums and products being reused across iterations. The $y_{n+4}$ result contains the partial sum-product $p1 = \alpha x_{n+1} + x_{n+2}$ which is produced by $y_{n+2}$, $p2 = \alpha^{3}x_{n-3} + \alpha^{2}x_{n-2} + \alpha x_{n-1} + x_n$ which is produced by $y_{n}$. Furthermore, we can also reuse $p0 = x_{n+3}$ from $y_{n+3}$ to prevent a memory load when executed on hardware. If we substituete these partial sums into $y_{n+4}$ we can get:
+
+\begin{equation}
+\begin{split}
+y_{n+4} &= \alpha^{8} y_{n-4} +  \alpha^{4}p2 \\
+    &\quad + \alpha^{2}p1 + \alpha p0 + x_{n+4}.
+\end{split}
+\end{equation}
+
+It is to note that this composition can also produce partial sum-products for reuse in later iterations as well. The partial sum-product$\alpha p0 + x_{n+4}$ can be reused by $y_{n+6}$, $\alpha^{2}p1 + \alpha p0 + x_{n+4}$ can be reused by $y_{n+8}$, and the value $x_{n+4}$ can be reused by $y_{n+5}$.
+
+In general, for a given iteration $y_n$ the first $n$ partial sum-products will be used in $n$ iterations later where $n$ must be a power of 2. The computed partial sum-products in a given iteration will be forwarded through FIFO channels initialized with the corresponding values to realize the alignment and ensure a pipelined execution. The new DFG for the linear recurrence utilizing recursive doubling is shown in Figure~\ref{fig:recurdoub}. For the same linear recurrence, the PE footprint is reduced to 12 PEs, which saves 8 PEs relative to the 20-PE naive look-ahead expansion while maintaining the same throughput. Moreover, the optimized DFG has a maximum fan-out of two, a limit that is supported by virtually all mainstream CGRA architectures. This avoids costly fan-out reduction algorithms or expensive routing resources needed to support the naive look-ahead expansion with high fan-out.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{recurdoub_DFG.png}
+    \caption{DFG after recursive doubling for linear recurrence}
+    \label{fig:recurdoub}
+\end{figure}

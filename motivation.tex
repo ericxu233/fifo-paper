@@ -1,0 +1,79 @@
+\section{Challenges and Motivation}
+\label{sec:chandmotiv}
+
+Prior work on spatial CGRAs has predominantly targeted data-driven applications, emphasizing throughput over control flexibility \cite{capalija2013high, vazquez2024strela}. Notable exceptions include architectures like UE-CGRA \cite{torng2021ultra}, and RipTide \cite{riptide}, which prioritize programmability that can better accommodate loop-carried dependences. While these designs expand the range of supported workloads, their emphasis is on programmability and does not necessarily address performance challenges completely. Common loop-carried dependence patterns remain poorly supported on CGRAs from a performance standpoint. They suffer from two key challenges with existing approaches:
+
+\begin{enumerate}
+    \item \textbf{Inefficient Usage of Resources:} Implementing PHI nodes as dedicated PEs results in low resource utilization, as these PEs perform no arithmetic operations.
+    
+    \item \textbf{Long Feedback-cycle Latency:} Both the explicit PHI node PE approach and memory serialzation approach induce long feedback-cycle latency, which decreases throughput.
+\end{enumerate}
+
+We illustrate these challenges through three important examples discussed in Section II B.
+
+\subsection{Redudctions}
+\label{subsec:reductions}
+Consider a loop with a simple reduction shown in Figure~\ref{fig:sub1}. The DFG extracted for this loop kernel is shown in Figure~\ref{fig:sub2}. The value produced by the add node is fed back into the computation in a feedback cycle since the add node is accumulating the input, which essentially represents the reduction. This single reduction operation occupies two nodes in the DFG, which consists of one add node and one PHI node. The PHI node is necessary here since it carries the initial value for the reduction. It maps to a dedicated PE on the CGRA, which then performs no useful arithmetic and serves only as a data carry holder, thereby reducing effective PE utilization. 
+
+Using the performance model introduced in Section~\ref{subsec:perf}, and assuming an ADD node latency of four cycles and a PHI node latency of two cycles, the overall maximum throughput of this DFG is limited to $1/6$ iters/cycle. Such a rate is far from ideal: in principle, a well-balanced DFG mapped onto the CGRA should obtain a throughput of 1 iters/cycle.
+
+\begin{figure}[t]
+    \centering
+    \begin{subfigure}[b]{0.45\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{redcode.png}
+        \caption{Reduction Code}
+        \label{fig:sub1}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.45\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{reddfg.png}
+        \caption{Resulting DFG}
+        \label{fig:sub2}
+    \end{subfigure}
+    \caption{Example Reduction Kernel and DFG}
+    \label{fig:two_subimages}
+\end{figure}
+
+An alternative implementation of this reduction that achieves ideal throughput is to enable individual CGRA PEs to directly support dedicated reductions at a throughput of 1 result per cycle. In order to support this, we need to add dedicated reduction FUs to the PEs. One option is to equip all PEs with such FUs. However, this approach significantly increases area and power consumption, as reduction FUs are generally more complex and costly than basic arithmetic units \cite{wijtvliet2021cgra}. A second option is to add dedicated reduction FUs to only a subset of PEs, resulting in a heterogeneous CGRA configuration. While this mitigates area and power overhead, it imposes strong constraints on the mapper and may ultimately prevent certain applications from being successfully mapped.
+
+\subsection{Linear Recurrences}
+Figure~\ref{fig:linrec-dfg} depicts a first-order linear recurrence, which is similar to reductions, but displays a longer feedback latency since the computation is a linear combination of previous computation results. If we assume the latency for the multiply node is 6 cycles, the add node is 4 cycles, and the PHI node is 2 cycles, then we have a total feedback latency of 12 cycles, which gives the throughput of this DFG at only $1/12$ iters/cycle. Far from ideal.
+
+Moreover, due to the more complex computations performed in the feedback cycle, dedicated hardware for these computations consumes much more area and power \cite{parhi1989pipeline}, and would not reasonably be included in a CGRA PE as an FU.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.6\linewidth]{linrec.png}
+    \caption{Lineare Recurrrence Loop Code and DFG}
+    \label{fig:linrec-dfg}
+\end{figure}
+
+\subsection{Data Reuse Across Loop Iterations}
+Consider the Jacobi-1d stencil kernel presented in Figure~\ref{fig:jacobi-1d}. This piece of code does not appear to display any loop-carried dependences at first. However, the memory location a[i+1] is accessed repeatedly across two subsequent iterations. On a CPU, this redundancy can be eliminated by introducing a reuse register chain that stores the value of a[i+1] for use in later iterations, thereby reducing the number of memory accesses to a single load. The optimized code is presented in Figure~\ref{fig:jacobi-1d-opt}. We can see that the optimization introduces two loop-carried dependences induced by the reuse register chain. This is called the \textit{sliding-window optimization}.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{jacobi.png}
+    \caption{Jacobi-1d Stencil Kernel}
+    \label{fig:jacobi-1d}
+\end{figure}
+
+CGRAs may benefit from this optimization as well. Most CGRA memory subsystems are simple and may not have the capability to exploit these stencil data reuse patterns by themselves. Their limited memory ports available may even act as a bottleneck for the system and cause overall throughput to drop when executing stencil kernels with many memory accesses. 
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{jacobiopt.png}
+    \caption{Jacobi-1d Stencil Kernel Optimized}
+    \label{fig:jacobi-1d-opt}
+\end{figure}
+
+However, existing approaches of handling loop-carried dependences on CGRAs prevent the sliding-window optimization from being scalable and effective. The DFG of the optimized Jacobi-1d kernel is shown in Figure~\ref{fig:jacobi-1d-opt-dfg}. The two reuse registers are transformed into two PHI nodes in the DFG. This optimized DFG is simple, with only five nodes in total. For stencil kernels with extensive overlapping memory accesses or long reuse distances, the sliding-window optimization generates long reuse register chains. This will result in the DFG creating a lot of PHI nodes, which may exceed the resources of typical CGRAs and waste PE resources. 
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{jacobioptdfg.png}
+    \caption{DFG of Jacobi-1d Stencil Kernel Optimized}
+    \label{fig:jacobi-1d-opt-dfg}
+\end{figure}

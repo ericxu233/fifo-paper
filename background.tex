@@ -1,0 +1,60 @@
+\section{Background}
+\subsection{Spatial Elastic CGRAs}
+
+A typical CGRA consists of a two-dimensional array of reconfigurable PEs interconnected by programmable links. When executing a program on the CGRA, each node in the DFG is  mapped explicitly to a PE at compilation time. There are generally two types of CGRA architectures which are temporal and spatial. Temporal CGRAs can dynamically reconfigure PEs in each cycle by leveraging reconfiguration memory to adapt PEs to different functionalities. This flexibility allows temporal CGRAs to execute larger and more complex DFGs. 
+
+Spatial CGRAs are statically configured at the start of execution and remain static throughout. They rely on the compiler or programmer to partition and execute large DFGs in stages \cite{sambhus2022reuse}. Because of the static nature of spatial CGRA PEs, they do not require reconfiguration memory and thus consume less power and area and can be clocked at higher speeds compared to temporal CGRAs.
+
+A special type of spatial CGRA is the spatial \textit{elastic} CGRA. An overview of it is shown in Figure~\ref{fig:cgra-image}. Each PE contains FIFOs to support an elastic execution model \cite{ragheb2022elastic}, which enables a data-driven execution model where operations only trigger when all data is available. FIFOs allow for the decoupling of PEs and enable asynchronous communication between them. This decoupling is a key characteristic of elastic execution. The flow of data between PEs are not strictly synchronized and allows variable latency PEs to operate without the need for explicit scheduling by the compiler.
+
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{cgra_el.png}
+    \caption{Spatial Elastic CGRA}
+    \label{fig:cgra-image}
+\end{figure}
+
+\subsection{Loop-carried dependences}
+\label{subsec:loop-carried-dep}
+A loop-carried dependence exists when an iteration of a loop depends on the result of a previous iteration. Such dependences can be classified into three types. A \textit{flow dependence} (read-after-write, RAW) occurs when an earlier iteration writes to a memory location that a later iteration reads. An \textit{anti-dependence} (write-after-read, WAR) arises when an earlier iteration reads from a memory location that a later iteration writes to. An \textit{output dependence} (write-after-write, WAW) occurs when two iterations both write to the same memory location, requiring that their relative order be preserved to maintain correctness. The distance in iteration count from when the result is produced and subsequently used is referred to as the \textit{dependence distance}. In this paper, we will primarily focus on flow dependence and refer to it as loop-carried dependence onwards.
+
+There are two implementations of loop-carried dependences in modern hardware architectures. One is often where the dependent results will be stored in a register or shift registers to be used almost immediately afterward. Another implementation is typically found in nested loops where the dependence distance is large and spans across loop ranges. Due to the long dependence distances, it becomes impractical to forward dependent values through conventional register chains. Instead, it would need to be written back to memory and read again in the future. It is worth noting that implementing loop-carried dependences through registers results in faster execution compared to memory implementations. The compiler selects the specific implementation to instantiate upon detecting a loop-carried dependence, based on the dependence's characteristics and optimization objectives.
+
+Loop-carried dependences arise in key computing patterns and thus handling them enables optimization opportunities across a wide range of applications. We will touch upon three important examples of this and discuss them extensively in the paper.
+
+\textbf{Reductions}: These are loop-carried dependences that arise when each iteration accumulates a value computed in the previous one, such as summing elements of an array. Reductions are typically implemented through registers since the dependence distance is small and the intermediate results are reused immediately by storing the accumulation in a register. They are often present in AI/ML workloads, numerical solvers, and scientific computing, where operations such as dot products, norms, or aggregations are dominant.
+
+\textbf{Linear recurrences}: These are a form of loop-carried dependence that have broad applications in many domains, including signal processing, financial modeling, and time-series analysis. Unlike reductions, the dependent value in a linear recurrence is usually stored and accessed from memory across iterations. These patterns often involve feedback loops, such as the exponential moving average (EMA), where the computation at each step depends on the previous result. Note that reductions are just a special type of linear recurrence, and we will refer to them both as recurrences in this paper.
+
+\textbf{Data reuse across loop iterations}: This loop-carried dependence pattern is commonly found in stencil computations, convolution kernels, and other spatial algorithms where the same input data is accessed in multiple nearby iterations. These dependences typically span neighboring indices and arise from overlapping computation windows. Although not always loop-carried in the read-after-write form, they manifest as input dependences that display spatial reuse opportunities and can be optimized through buffering and sliding-window techniques. These optimizations are facilitated using register chains which would form read-after-write dependences.
+
+\subsection{DFG Performance Characteristics}
+\label{subsec:perf}
+
+Although the exact performance/throughput of a DFG running on a spatial elastic CGRA may depend on various factors, the upper bound of the throughput can often be observed by the DFG's characteristics. The DFG size and the pipeline imbalance of the graph are all examples of such factors \cite{karunaratne2017hycube, capalija2013high}. However, in this paper, we will focus only on one important metric, the \textit{feedback-cycle latency}. The feedback-cycle latency of a DFG denotes the latency, measured in clock cycles, of the longest feedback-cycle within the DFG. This only exists when the DFG is not acyclic.
+
+Given that the feedback-cycle is the only performance-limiting factor (assuming that the DFG size fits the CGRA and there are no pipeline imbalances), then the maximum throughput of a DFG running on a CGRA can be modeled as:
+
+\begin{equation}
+\text{Throughput (iters/cycle)} = \frac{\text{dependence distance}}{\text{feedback-cycle latency}}
+\end{equation}
+
+For example, consider the DFG presented in Figure~\ref{fig:example-dfg}. The feedback cycle is attached to the add node in the middle. The dependence distance here is 1 since the add result is immediately reused in the next loop iteration. If the add node has a latency of 4 cycles, then the total feedback-cycle latency is 4 in this case since the feedback path only consist of one add node. Thus, the throughput of this DFG executing on a spatial elastic CGRA would be $1/4$ \textit{iterations per cycle}, which means it completes an instance of the DFG every 4 cycles. However, in reality, the throughput might even be lower that $1/4$ iters/cycle. This is because the load node, when mapped onto a physical PE would deliver data at a much higher rate than the add node is consuming, which at some point may incur stall restart penalties when FIFOs are filled up with preloaded values.
+
+The feedback-cycle latency is a similar concept to the recurrence constrained minimum initiation interval (RecMII) found in modulo scheduling, that are often applicable to temporal CGRAs \cite{karunaratne2017hycube, rau1994iterative}. It is an important characteristic for DFGs that contain loop-carried dependences, particularly recurrences, as these constructs inherently manifest as feedback cycles within the graph.
+
+\subsection{Support for Loop-carried dependences on CGRAs}
+
+Current spatial CGRA architectures support loop-carried dependences through two means. One is by representing the PHI node from SSA intermediate representation as an explicit construct in the DFG, which can be directly implemented by a PE. This is analogous to having a loop-carried value stored in a register for use in subsequent iterations. Loop-carried dependences that are implemented by registers often require an initial value when the loop starts executing. This is the exact purpose of the PHI node, which carries the initial value and acts as a buffer for the value to be used in the next iteration. This approach is used by many CGRAs both spatial and temporal \cite{karunaratne2017hycube, torng2021ultra, riptide}. 
+
+The second approach is to spill the loop-carried value to memory and serialize the dependent memory operations through explicit dataflow in the DFG. Traditional CPU architectures are able to serialize dependent memory operations through sequentially executing instructions from the program. Spatial elastic CGRAs don't have this ability naturally since operations happen spatially and asynchronously in parallel. To address this, previous work has proposed that the compiler would identify dependent memory operations and add edges in the DFG that connect the two operations forming a cycle \cite{riptide}. The hardware implementation of this would require the dependent load PEs to produce and consume data tokens from each other. Therefore, one operation can only execute once the other one finishes since it needs to wait for its result. 
+
+These approaches suffer from two fundamental problems that we will discuss in Section III and present a motivation for our FIFO initialization work.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.4\linewidth]{example_dfg.png}
+    \caption{Example DFG}
+    \label{fig:example-dfg}
+\end{figure}

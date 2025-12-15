@@ -1,0 +1,31 @@
+\section{FIFO Initialization}
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{fifoinit.png}
+    \caption{FIFO Initialization}
+    \label{fig:fifoinit}
+\end{figure}
+
+\subsection{PE FIFO Units}
+As shown in Figure~\ref{fig:cgra-image}, each PE in a spatial elastic CGRA contains FIFO units. These FIFO units serve the purpose of buffering data that enables elastic execution for the CGRAs. With this capability, PEs can communicate asynchronously and allow variable latency functional units and irregular memory accesses without the need for the compiler to schedule them explicitly. Furthermore, larger FIFO unit depths mitigate throughput drop issues due to pipeline imbalance on DFGs that have unbalanced branches that merge \cite{capalija2013high, aihara2025impact}. Overall, the elastic execution model is very advantageous since it alleviates the burden from the compiler and allows more execution flexibility for the CGRA.
+
+However, not all applications suffer from pipeline imbalance nor have irregular memory accesses. The three examples of loop-carried dependences presented in Section~\ref{subsec:loop-carried-dep} illustrate cases where FIFO units are underutilized. Specifically, in these applications, FIFOs along the forward dataflow paths preceding the feedback path are heavily used and often fill up, since data is produced faster than it can be consumed by the feedback path. However, they are underutilized for nodes in the feedback path. Data propogates sequentially in the feedback path with no notion of pipelining, and most FIFOs in the path remain empty. Moreover, the FIFO units themselves have a small latency, which increases the overall feedback-cycle latency and further decreases throughput.
+
+\subsection{Re-purposing FIFO Units}
+In Section~\ref{subsec:reductions}, we showed that the PHI node serves the purpose of holding the initial value for the reduction. This is true for all loop-carried dependences since each requires an initial value to provide the consumer at the beginning of the first iteration, before any values have been produced. Prior work uses one explicit PE for each of these initial values, which is not efficient. However, PE FIFO units are well-suited for carrying initial values. Since each PE includes two arrays of SRAM-based FIFO units, these structures provide a natural location to store initialization data and thereby eliminate the need for an entire PE to hold one initial value.
+
+Based on this observation, we propose \textit{FIFO Initialization}. The key idea is to leverage the existing FIFO units within spatial CGRA PEs to store the initial values required by loop-carried dependences at reconfiguration before the loop starts executing, thereby enabling their efficient support. An example is shown in Figure~\ref{fig:fifoinit}. The left side depicts the original reduction kernel DFG from Figure~\ref{fig:sub2} mapped onto a 3$\times$3 CGRA. The right side shows the mapping after applying FIFO Initialization. With this technique, the DFG and its mapping are optimized such that the PHI node no longer requires one entire PE. Moreover, this technique offers more than just reducing the number of PEs used, but it also enables optimizations targeting loop-carried dependences. We will discuss compiler support and optimizations for FIFO initialization in Section~\ref{sec:optimization}.
+
+\subsection{Hardware Implementation}
+
+FIFO initialization comes with a low overhead. The reconfiguration logic already present in modern CGRA designs can be extended to support FIFO initialization with minimal changes. Figure~\ref{fig:fifoimpl} shows the high-level microarchitectural implementation, where the red lines highlight the additional hardware. Since FIFO inputs are already multiplexed, initialization requires only one additional MUX entry connected to a data decoder. The decoder identifies packets marked for FIFO initialization, determines the target FIFO, and loads the corresponding value. These initialization values are transmitted sequentially to each FIFO, with the host responsible for preparing the data stream.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{fifoinitarch.png}
+    \caption{FIFO Initialization Hardware Implementation}
+    \label{fig:fifoimpl}
+\end{figure}
+
+This mechanism does increase runtime reconfiguration overhead. However, the cost is acceptable. Spatial elastic CGRAs are designed to amortize reconfiguration across long-running loops. Even after reconfiguration, devices that follow a pure data-streaming model without scratchpad memory incur substantial startup latency. This is due to data being streamed from the main DRAM, which could take several hundred cycles to arrive \cite{abbaszadeh2023efficient}. As a result, the relative impact of FIFO initialization runtime overhead is minor in practice.

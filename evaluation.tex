@@ -1,14 +1,67 @@
 \section{Evaluation}
 \label{sec:evaluation}
 
-In this section, we evaluate the effectiveness of FIFO initialization on a spatial elastic CGRA. We first describe our experimental setup, then present results on performance improvements and resource utilization.
+To evaluate FIFO initialization and the associated optimizations, we implemented a cycle-accurate simulator of our CGRA architecture with FIFO initialization support. We compared the performance of our approach against a baseline CGRA architecture without FIFO initialization across a suite of benchmarks with varying loop-carried dependence characteristics.
 
 \subsection{Experimental Setup}
 \label{subsec:exp-setup}
+Our simulator models a CGRA with 8x8 processing elements (PEs), each equipped with a FIFO of depth 8 by default. The latency of floating-point PE operations is described in Table~\ref{tab:pe-latency}. Other operations such as integer arithmetic and logic operations are set to have a latency of 1 cycle. The inter-PE communication latency is set to 1 cycle. 
 
-% Describe your experimental methodology here:
-% - CGRA architecture parameters (PE count, FIFO depths, etc.)
-% - Baseline comparison (without FIFO initialization)
-% - Benchmarks used
-% - Simulation/synthesis tools
-% - Metrics measured (cycles, throughput, area, power)
+Our CGRA assumes an elastic dataflow execution model along with data streaming. Data is streamed onto and out of the CGRA from DRAM at a constant rate of 16 words per cycle. The latency to access DRAM is set to 400 cycles by default which dictates the initial latency to start streaming data as well as the stall cycles when FIFOs fill up due to pipeline imbalance.
+
+To model the runtime overhead of the peeled-loop iterations introduced by the optimizations in Section \ref{sec:optimization}, we assume that each peeled iteration incurs an additional overhead of 3 cyles times the number of operations in the target loop body.
+
+\begin{table}[h]
+\centering
+\caption{PE Operation Latencies (in cycles)}
+\label{tab:pe-latency}
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Operation} & \textbf{Latency} \\
+\hline
+fadd & 3 \\
+fsub & 3 \\
+fmul & 4 \\
+fdiv & 6 \\
+fcomp & 2 \\
+exp & 6 \\
+\hline
+\end{tabular}
+\end{table}
+
+The baseline CGRA architecture is identical except that it does not support FIFO initialization. Therefore, loop-carried dependences must be handled using the PHI node approach.
+
+The benchmark suite consists of various benchmarks found in scientific computing, machine learning, and signal processing domains. We take some of the benchmarks from Polybench \cite{pouchet2012polybench} and some from prior works on accelerating linear recurrences \cite{maleki2018automatic}. Table~\ref{tab:benchmarks} summarizes the benchmarks used in our evaluation.
+
+\begin{table}[h]
+\centering
+\caption{Benchmark Suite}
+\label{tab:benchmarks}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Benchmark} & \textbf{Category} & \textbf{Description} \\
+\hline
+\multicolumn{3}{|c|}{\textit{Linear Recurrences}} \\
+\hline
+ema & Signal Proc. & Exponential moving average \\
+exp\_decay & Signal Proc. & Exponential decay filter \\
+hp\_filter & Signal Proc. & High-pass filter \\
+momentum\_sgd & ML & SGD with momentum update \\
+weighted\_avg & Signal Proc. & Weighted sum recurrence \\
+\hline
+\multicolumn{3}{|c|}{\textit{Reductions}} \\
+\hline
+gemm & Linear Algebra & Matrix multiplication \\
+mvt & Linear Algebra & Matrix-vector product \\
+gaussian\_cdf & Statistics & Gaussian CDF computation \\
+sep & Physics & Spring energy profile \\
+fd & Physics & Fluid dynamics simulation \\
+\hline
+\multicolumn{3}{|c|}{\textit{Stencils}} \\
+\hline
+conv2d & Image Proc. & 3$\times$3 2D convolution \\
+conv5x5 & Image Proc. & 5$\times$5 2D convolution \\
+jacobi2d & Numerical & Jacobi 2D stencil \\
+\hline
+\end{tabular}
+\end{table}

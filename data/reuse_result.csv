@@ -1,0 +1,10 @@
+benchmark,config,dfg_size,reuse_size
+jacobi2d,1,10,3
+jacobi2d,0,39,32
+jacobi2d,2,8,1
+conv2d,2,19,3
+conv2d,1,20,4
+conv2d,0,34,18
+conv5x5,1,68,16
+conv5x5,0,120,68
+conv5x5,2,64,12

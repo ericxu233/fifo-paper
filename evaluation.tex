@@ -76,10 +76,10 @@ jacobi2d & Numerical & Jacobi 2D stencil \\
 \centering
 \begin{tikzpicture}
 \begin{axis}[
-    ybar,
+    ybar=0pt,
     width=\columnwidth,
     height=6cm,
-    bar width=4pt,
+    bar width=6pt,
     ylabel={Throughput (iter/cycle)},
     symbolic x coords={ema, exp_decay, hp_filter, momentum_sgd, weighted_avg, gaussian_cdf, gemm, mvt, sep, fd},
     xtick=data,
@@ -87,28 +87,33 @@ jacobi2d & Numerical & Jacobi 2D stencil \\
     x tick label style={rotate=45, anchor=east, font=\footnotesize},
     ymin=0,
     ymax=1.1,
+    ytick={0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0},
+    yticklabel style={font=\footnotesize},
     legend style={at={(0.5,1.02)}, anchor=south, legend columns=3, font=\scriptsize},
     legend cell align={left},
     enlarge x limits=0.08,
 ]
 
 % Baseline (PHI-only)
-\addplot[fill=gray!60, draw=black] table[x=testname, y=baseline] {\throughputdata};
+\addplot[fill=gray!60, draw=none] table[x=testname, y=baseline] {\throughputdata};
 
 % FIFO Initialization
-\addplot[fill=blue!60, draw=black] table[x=testname, y=fifo_init] {\throughputdata};
+\addplot[fill=blue!60, draw=none] table[x=testname, y=fifo_init] {\throughputdata};
 
 % FIFO Init + Lookahead
-\addplot[fill=red!60, draw=black] table[x=testname, y=lookahead] {\throughputdata};
+\addplot[fill=red!60, draw=none] table[x=testname, y=lookahead] {\throughputdata};
 
 \legend{Baseline (PHI-only), FIFO Init, FIFO Init + Lookahead}
 \end{axis}
 \end{tikzpicture}
-\caption{Throughput comparison across benchmarks for reductions and linear recurrences. Default configuration: FIFO depth=8, streaming latency=400 cycles, MEDIUM\_DATASET.}
+\caption{Throughput comparison across benchmarks for reductions and linear recurrences}
 \label{fig:throughput-comparison}
 \end{figure}
 
 Figure~\ref{fig:throughput-comparison} presents the throughput comparison across our benchmark suite for reductions and linear recurrences. We compare three configurations: (1) the baseline PHI-only implementation without FIFO initialization, (2) FIFO initialization without lookahead expansion, and (3) FIFO initialization with lookahead expansion enabled.
 
-The results demonstrate that FIFO initialization alone provides modest throughput improvements, ranging from 1.1$\times$ to 1.4$\times$ over the baseline. This improvement comes from eliminating the PHI node overhead and reducing the DFG size. However, the most significant gains are achieved when combining FIFO initialization with lookahead expansion, which enables effective pipelining of the loop-carried dependence chain. With lookahead expansion, throughput improves dramatically---up to 12.7$\times$ for \texttt{exp\_decay} and over 9$\times$ on average across all benchmarks.
+The results demonstrate that FIFO initialization alone provides modest throughput improvements, ranging from 1.1$\times$ to 1.4$\times$ over the baseline. This improvement comes from eliminating the PHI node and reducing the feedback-cycle latency. However, the most significant gains are achieved when combining FIFO initialization with lookahead expansion, which enables effective pipelining of the loop-carried dependence chain. With lookahead expansion, throughput improves dramatically---up to 12.7$\times$ and over 9$\times$ on average across all benchmarks. It shows that look-ahead expansion effectively leverages FIFO initialization and completely eliminates the feedback-cycle bottleneck to achieve the desired throughput.
+
+\subsection{Impact of FIFO Size}
+\label{subsec:fifo-size}
 

@@ -98,6 +98,71 @@ def main():
     # Print summary
     print("\nThroughput Summary:")
     print(combined.to_string(index=False))
+    
+    # Generate FIFO size impact data
+    generate_fifo_size_impact(df, output_dir)
+
+
+def generate_fifo_size_impact(df, output_dir):
+    """Generate data showing speedup vs FIFO size for selected benchmarks."""
+    
+    # Fixed parameters (vary only fifo_size)
+    streaming_latency = 400
+    dataset_size = "MEDIUM_DATASET"
+    pb = 1
+    
+    # All benchmarks to include
+    benchmarks = ['ema', 'exp_decay', 'hp_filter', 'momentum_sgd', 'weighted_avg',
+                  'gaussian_cdf', 'gemm', 'mvt', 'sep', 'fd']
+    
+    # FIFO sizes to include (sorted)
+    fifo_sizes = sorted(df['fifo_size'].unique())
+    
+    results = []
+    
+    for bench in benchmarks:
+        for fifo_size in fifo_sizes:
+            # Filter for this configuration
+            mask = (
+                (df['testname'] == bench) &
+                (df['PB'] == pb) &
+                (df['fifo_size'] == fifo_size) &
+                (df['streaming_latency'] == streaming_latency) &
+                (df['size'] == dataset_size)
+            )
+            filtered = df[mask]
+            
+            # Get baseline (LOOKAHEAD=0, FIFO=0)
+            baseline = filtered[(filtered['LOOKAHEAD'] == 0) & (filtered['FIFO'] == 0)]
+            
+            # Get lookahead (LOOKAHEAD=1, FIFO=1)
+            lookahead = filtered[(filtered['LOOKAHEAD'] == 1) & (filtered['FIFO'] == 1)]
+            
+            if len(baseline) > 0 and len(lookahead) > 0:
+                baseline_cycles = baseline['execution_cycles'].values[0]
+                lookahead_cycles = lookahead['execution_cycles'].values[0]
+                speedup = baseline_cycles / lookahead_cycles
+                
+                results.append({
+                    'fifo_size': fifo_size,
+                    'benchmark': bench,
+                    'speedup': speedup
+                })
+    
+    # Convert to dataframe and pivot for pgfplots
+    results_df = pd.DataFrame(results)
+    
+    # Pivot so each benchmark is a column
+    pivoted = results_df.pivot(index='fifo_size', columns='benchmark', values='speedup')
+    pivoted = pivoted.reset_index()
+    
+    # Save to CSV
+    output_file = os.path.join(output_dir, 'fifo_size_impact.csv')
+    pivoted.to_csv(output_file, index=False)
+    
+    print(f"\nGenerated FIFO size impact data:")
+    print(f"  - fifo_size_impact.csv")
+    print(pivoted.to_string(index=False))
 
 if __name__ == '__main__':
     main()

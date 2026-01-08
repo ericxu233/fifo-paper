@@ -101,6 +101,9 @@ def main():
     
     # Generate FIFO size impact data
     generate_fifo_size_impact(df, output_dir)
+    
+    # Generate streaming latency impact data
+    generate_streaming_latency_impact(df, output_dir)
 
 
 def generate_fifo_size_impact(df, output_dir):
@@ -163,6 +166,68 @@ def generate_fifo_size_impact(df, output_dir):
     print(f"\nGenerated FIFO size impact data:")
     print(f"  - fifo_size_impact.csv")
     print(pivoted.to_string(index=False))
+
+def generate_streaming_latency_impact(df, output_dir):
+    """Generate data showing speedup vs streaming latency for selected benchmarks."""
+    
+    # Fixed parameters (vary only streaming_latency)
+    fifo_size = 8
+    dataset_size = "MEDIUM_DATASET"
+    pb = 1
+    
+    # All benchmarks to include
+    benchmarks = ['ema', 'exp_decay', 'hp_filter', 'momentum_sgd', 'weighted_avg',
+                  'gaussian_cdf', 'gemm', 'mvt', 'sep', 'fd']
+    
+    # Streaming latencies to include (sorted)
+    streaming_latencies = sorted(df['streaming_latency'].unique())
+    
+    results = []
+    
+    for bench in benchmarks:
+        for streaming_latency in streaming_latencies:
+            # Filter for this configuration
+            mask = (
+                (df['testname'] == bench) &
+                (df['PB'] == pb) &
+                (df['fifo_size'] == fifo_size) &
+                (df['streaming_latency'] == streaming_latency) &
+                (df['size'] == dataset_size)
+            )
+            filtered = df[mask]
+            
+            # Get baseline (LOOKAHEAD=0, FIFO=0)
+            baseline = filtered[(filtered['LOOKAHEAD'] == 0) & (filtered['FIFO'] == 0)]
+            
+            # Get lookahead (LOOKAHEAD=1, FIFO=1)
+            lookahead = filtered[(filtered['LOOKAHEAD'] == 1) & (filtered['FIFO'] == 1)]
+            
+            if len(baseline) > 0 and len(lookahead) > 0:
+                baseline_cycles = baseline['execution_cycles'].values[0]
+                lookahead_cycles = lookahead['execution_cycles'].values[0]
+                speedup = baseline_cycles / lookahead_cycles
+                
+                results.append({
+                    'streaming_latency': streaming_latency,
+                    'benchmark': bench,
+                    'speedup': speedup
+                })
+    
+    # Convert to dataframe and pivot for pgfplots
+    results_df = pd.DataFrame(results)
+    
+    # Pivot so each benchmark is a column
+    pivoted = results_df.pivot(index='streaming_latency', columns='benchmark', values='speedup')
+    pivoted = pivoted.reset_index()
+    
+    # Save to CSV
+    output_file = os.path.join(output_dir, 'streaming_latency_impact.csv')
+    pivoted.to_csv(output_file, index=False)
+    
+    print(f"\nGenerated streaming latency impact data:")
+    print(f"  - streaming_latency_impact.csv")
+    print(pivoted.to_string(index=False))
+
 
 if __name__ == '__main__':
     main()

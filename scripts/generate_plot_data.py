@@ -229,5 +229,237 @@ def generate_streaming_latency_impact(df, output_dir):
     print(pivoted.to_string(index=False))
 
 
+def generate_unroll_comparison(output_dir):
+    """Generate data comparing baseline, unrolled, lookahead, and unrolled+lookahead."""
+    
+    # Paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(script_dir)
+    input_file = os.path.join(project_dir, 'data', 'unroll_results.csv')
+    
+    # Read the CSV
+    df = pd.read_csv(input_file)
+    
+    # Fixed parameters
+    fifo_size = 8
+    dataset_size = "MEDIUM_DATASET"
+    
+    # Benchmarks available in unroll_results
+    benchmarks = df['testname'].unique().tolist()
+    
+    results = []
+    
+    for bench in benchmarks:
+        bench_data = df[(df['testname'] == bench) & 
+                        (df['fifo_size'] == fifo_size) & 
+                        (df['size'] == dataset_size)]
+        
+        # 1. Baseline: LOOKAHEAD=0, FIFO=0, PB=0, unroll=none
+        baseline = bench_data[(bench_data['LOOKAHEAD'] == 0) & 
+                              (bench_data['FIFO'] == 0) & 
+                              (bench_data['PB'] == 0) & 
+                              (bench_data['unroll'] == 'none')]
+        
+        # 2. Max unrolled without lookahead: FIFO=0, LOOKAHEAD=0, PB=1, max unroll with dfg_size < 64
+        unrolled_no_la = bench_data[(bench_data['LOOKAHEAD'] == 0) & 
+                                     (bench_data['FIFO'] == 0) & 
+                                     (bench_data['PB'] == 0) & 
+                                     (bench_data['dfg_size'] < 64) &
+                                     (bench_data['unroll'] != 'none')]
+        if len(unrolled_no_la) > 0:
+            # Get the one with largest dfg_size (most unrolling)
+            unrolled_no_la = unrolled_no_la.loc[unrolled_no_la['dfg_size'].idxmax()]
+        
+        # 3. Lookahead without unrolling: LOOKAHEAD=1, FIFO=1, PB=1, unroll=none
+        lookahead = bench_data[(bench_data['LOOKAHEAD'] == 1) & 
+                               (bench_data['FIFO'] == 1) & 
+                               (bench_data['PB'] == 1) & 
+                               (bench_data['unroll'] == 'none')]
+        
+        # 4. Max unrolled with lookahead: FIFO=1, LOOKAHEAD=1, PB=1, max unroll with dfg_size < 64
+        unrolled_la = bench_data[(bench_data['LOOKAHEAD'] == 1) & 
+                                  (bench_data['FIFO'] == 1) & 
+                                  (bench_data['PB'] == 1) & 
+                                  (bench_data['dfg_size'] < 64) &
+                                  (bench_data['unroll'] != 'none')]
+        if len(unrolled_la) > 0:
+            # Get the one with largest dfg_size (most unrolling)
+            unrolled_la = unrolled_la.loc[unrolled_la['dfg_size'].idxmax()]
+        
+        trip_count = 10000  # From unroll_results.csv
+        
+        result = {'testname': bench}
+        
+        if len(baseline) > 0:
+            result['baseline'] = trip_count / baseline['execution_cycles'].values[0]
+        
+        if isinstance(unrolled_no_la, pd.Series) and len(unrolled_no_la) > 0:
+            result['unrolled'] = trip_count / unrolled_no_la['execution_cycles']
+            result['unrolled_factor'] = unrolled_no_la['unroll']
+        elif isinstance(unrolled_no_la, pd.DataFrame) and len(unrolled_no_la) > 0:
+            result['unrolled'] = trip_count / unrolled_no_la['execution_cycles'].values[0]
+            result['unrolled_factor'] = unrolled_no_la['unroll'].values[0]
+        
+        if len(lookahead) > 0:
+            result['lookahead'] = trip_count / lookahead['execution_cycles'].values[0]
+        
+        if isinstance(unrolled_la, pd.Series) and len(unrolled_la) > 0:
+            result['unrolled_lookahead'] = trip_count / unrolled_la['execution_cycles']
+            result['unrolled_la_factor'] = unrolled_la['unroll']
+        elif isinstance(unrolled_la, pd.DataFrame) and len(unrolled_la) > 0:
+            result['unrolled_lookahead'] = trip_count / unrolled_la['execution_cycles'].values[0]
+            result['unrolled_la_factor'] = unrolled_la['unroll'].values[0]
+        
+        results.append(result)
+    
+    # Convert to dataframe
+    results_df = pd.DataFrame(results)
+    
+    # Define benchmark order
+    benchmark_order = ['ema', 'exp_decay', 'hp_filter', 'momentum_sgd', 'weighted_avg',
+                       'gaussian_cdf', 'gemm', 'mvt', 'sep']
+    results_df['order'] = results_df['testname'].apply(
+        lambda x: benchmark_order.index(x) if x in benchmark_order else 999
+    )
+    results_df = results_df.sort_values('order').drop('order', axis=1)
+    
+    # Save to CSV
+    output_file = os.path.join(output_dir, 'unroll_comparison.csv')
+    results_df.to_csv(output_file, index=False)
+    
+    print(f"\nGenerated unroll comparison data:")
+    print(f"  - unroll_comparison.csv")
+    print(results_df.to_string(index=False))
+
+
+def generate_unroll_per_pe_comparison(output_dir):
+    """Generate data comparing throughput per PE for baseline, unrolled, lookahead, and unrolled+lookahead."""
+    
+    # Paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(script_dir)
+    input_file = os.path.join(project_dir, 'data', 'unroll_results.csv')
+    
+    # Read the CSV
+    df = pd.read_csv(input_file)
+    
+    # Fixed parameters
+    fifo_size = 8
+    dataset_size = "MEDIUM_DATASET"
+    
+    # Benchmarks available in unroll_results
+    benchmarks = df['testname'].unique().tolist()
+    
+    results = []
+    
+    for bench in benchmarks:
+        bench_data = df[(df['testname'] == bench) & 
+                        (df['fifo_size'] == fifo_size) & 
+                        (df['size'] == dataset_size)]
+        
+        # 1. Baseline: LOOKAHEAD=0, FIFO=0, PB=0, unroll=none
+        baseline = bench_data[(bench_data['LOOKAHEAD'] == 0) & 
+                              (bench_data['FIFO'] == 0) & 
+                              (bench_data['PB'] == 0) & 
+                              (bench_data['unroll'] == 'none')]
+        
+        # 2. Max unrolled without lookahead: FIFO=0, LOOKAHEAD=0, PB=0, max unroll with dfg_size < 64
+        unrolled_no_la = bench_data[(bench_data['LOOKAHEAD'] == 0) & 
+                                     (bench_data['FIFO'] == 0) & 
+                                     (bench_data['PB'] == 0) & 
+                                     (bench_data['dfg_size'] < 64) &
+                                     (bench_data['unroll'] != 'none')]
+        if len(unrolled_no_la) > 0:
+            # Get the one with largest dfg_size (most unrolling)
+            unrolled_no_la = unrolled_no_la.loc[unrolled_no_la['dfg_size'].idxmax()]
+        
+        # 3. Lookahead without unrolling: LOOKAHEAD=1, FIFO=1, PB=1, unroll=none
+        lookahead = bench_data[(bench_data['LOOKAHEAD'] == 1) & 
+                               (bench_data['FIFO'] == 1) & 
+                               (bench_data['PB'] == 1) & 
+                               (bench_data['unroll'] == 'none')]
+        
+        # 4. Max unrolled with lookahead: FIFO=1, LOOKAHEAD=1, PB=1, max unroll with dfg_size < 64
+        unrolled_la = bench_data[(bench_data['LOOKAHEAD'] == 1) & 
+                                  (bench_data['FIFO'] == 1) & 
+                                  (bench_data['PB'] == 1) & 
+                                  (bench_data['dfg_size'] < 64) &
+                                  (bench_data['unroll'] != 'none')]
+        if len(unrolled_la) > 0:
+            # Get the one with largest dfg_size (most unrolling)
+            unrolled_la = unrolled_la.loc[unrolled_la['dfg_size'].idxmax()]
+        
+        trip_count = 10000  # From unroll_results.csv
+        
+        result = {'testname': bench}
+        
+        # Compute throughput per PE (dfg_size represents number of PEs)
+        if len(baseline) > 0:
+            throughput = trip_count / baseline['execution_cycles'].values[0]
+            num_pes = baseline['dfg_size'].values[0]
+            result['baseline'] = throughput / num_pes
+            result['baseline_pes'] = num_pes
+        
+        if isinstance(unrolled_no_la, pd.Series) and len(unrolled_no_la) > 0:
+            throughput = trip_count / unrolled_no_la['execution_cycles']
+            num_pes = unrolled_no_la['dfg_size']
+            result['unrolled'] = throughput / num_pes
+            result['unrolled_pes'] = num_pes
+            result['unrolled_factor'] = unrolled_no_la['unroll']
+        elif isinstance(unrolled_no_la, pd.DataFrame) and len(unrolled_no_la) > 0:
+            throughput = trip_count / unrolled_no_la['execution_cycles'].values[0]
+            num_pes = unrolled_no_la['dfg_size'].values[0]
+            result['unrolled'] = throughput / num_pes
+            result['unrolled_pes'] = num_pes
+            result['unrolled_factor'] = unrolled_no_la['unroll'].values[0]
+        
+        if len(lookahead) > 0:
+            throughput = trip_count / lookahead['execution_cycles'].values[0]
+            num_pes = lookahead['dfg_size'].values[0]
+            result['lookahead'] = throughput / num_pes
+            result['lookahead_pes'] = num_pes
+        
+        if isinstance(unrolled_la, pd.Series) and len(unrolled_la) > 0:
+            throughput = trip_count / unrolled_la['execution_cycles']
+            num_pes = unrolled_la['dfg_size']
+            result['unrolled_lookahead'] = throughput / num_pes
+            result['unrolled_lookahead_pes'] = num_pes
+            result['unrolled_la_factor'] = unrolled_la['unroll']
+        elif isinstance(unrolled_la, pd.DataFrame) and len(unrolled_la) > 0:
+            throughput = trip_count / unrolled_la['execution_cycles'].values[0]
+            num_pes = unrolled_la['dfg_size'].values[0]
+            result['unrolled_lookahead'] = throughput / num_pes
+            result['unrolled_lookahead_pes'] = num_pes
+            result['unrolled_la_factor'] = unrolled_la['unroll'].values[0]
+        
+        results.append(result)
+    
+    # Convert to dataframe
+    results_df = pd.DataFrame(results)
+    
+    # Define benchmark order
+    benchmark_order = ['ema', 'exp_decay', 'hp_filter', 'momentum_sgd', 'weighted_avg',
+                       'gaussian_cdf', 'gemm', 'mvt', 'sep']
+    results_df['order'] = results_df['testname'].apply(
+        lambda x: benchmark_order.index(x) if x in benchmark_order else 999
+    )
+    results_df = results_df.sort_values('order').drop('order', axis=1)
+    
+    # Save to CSV
+    output_file = os.path.join(output_dir, 'unroll_per_pe_comparison.csv')
+    results_df.to_csv(output_file, index=False)
+    
+    print(f"\nGenerated unroll per-PE comparison data:")
+    print(f"  - unroll_per_pe_comparison.csv")
+    print(results_df.to_string(index=False))
+
+
 if __name__ == '__main__':
     main()
+    
+    # Also generate unroll comparison
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(script_dir)
+    output_dir = os.path.join(project_dir, 'artifacts')
+    generate_unroll_comparison(output_dir)
+    generate_unroll_per_pe_comparison(output_dir)

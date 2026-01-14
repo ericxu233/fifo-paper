@@ -454,6 +454,150 @@ def generate_unroll_per_pe_comparison(output_dir):
     print(results_df.to_string(index=False))
 
 
+def generate_pipeline_balancing_impact(output_dir):
+    """Generate data comparing PB=0 vs PB=1 for lookahead with max unrolling under 64 PEs.
+    
+    Key: We select benchmarks based on PB=1 having dfg_size < 64, then compare with PB=0
+    using the same unroll factor.
+    """
+    
+    # Paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(script_dir)
+    unroll_file = os.path.join(project_dir, 'data', 'unroll_results.csv')
+    perf_file = os.path.join(project_dir, 'data', 'perf_results.csv')
+    
+    # Read the CSVs
+    unroll_df = pd.read_csv(unroll_file)
+    perf_df = pd.read_csv(perf_file)
+    
+    # Fixed parameters
+    fifo_size = 8
+    dataset_size = "MEDIUM_DATASET"
+    streaming_latency = 400
+    
+    # Benchmarks from unroll_results (exclude fd which comes from perf_results)
+    unroll_benchmarks = ['ema', 'exp_decay', 'hp_filter', 'momentum_sgd', 'weighted_avg',
+                         'gaussian_cdf', 'gemm', 'mvt', 'sep']
+    
+    results = []
+    trip_count = 10000  # From unroll_results.csv
+    
+    for bench in unroll_benchmarks:
+        bench_data = unroll_df[(unroll_df['testname'] == bench) & 
+                               (unroll_df['fifo_size'] == fifo_size) & 
+                               (unroll_df['size'] == dataset_size)]
+        
+        # First, find max unroll for PB=1 where dfg_size < 64
+        pb_on_candidates = bench_data[(bench_data['LOOKAHEAD'] == 1) & 
+                                       (bench_data['FIFO'] == 1) & 
+                                       (bench_data['PB'] == 1) & 
+                                       (bench_data['dfg_size'] < 64) &
+                                       (bench_data['unroll'] != 'none')]
+        
+        if len(pb_on_candidates) == 0:
+            # No unrolled version fits, skip this benchmark
+            continue
+            
+        # Get the one with largest dfg_size (most unrolling that still fits)
+        pb_on = pb_on_candidates.loc[pb_on_candidates['dfg_size'].idxmax()]
+        selected_unroll = pb_on['unroll']
+        
+        # Now find PB=0 with the SAME unroll factor
+        pb_off_candidates = bench_data[(bench_data['LOOKAHEAD'] == 1) & 
+                                        (bench_data['FIFO'] == 1) & 
+                                        (bench_data['PB'] == 0) & 
+                                        (bench_data['unroll'] == selected_unroll)]
+        
+        if len(pb_off_candidates) == 0:
+            continue
+            
+        pb_off = pb_off_candidates.iloc[0]
+        
+        result = {'testname': bench}
+        
+        pb_off_throughput = trip_count / pb_off['execution_cycles']
+        pb_off_pes = pb_off['dfg_size']
+        result['pb_off_throughput'] = pb_off_throughput
+        result['pb_off_pes'] = pb_off_pes
+        result['unroll_factor'] = selected_unroll
+        
+        pb_on_throughput = trip_count / pb_on['execution_cycles']
+        pb_on_pes = pb_on['dfg_size']
+        result['pb_on_throughput'] = pb_on_throughput
+        result['pb_on_pes'] = pb_on_pes
+        
+        # Compute speedups
+        result['throughput_speedup'] = pb_on_throughput / pb_off_throughput
+        
+        pb_off_throughput_per_pe = pb_off_throughput / pb_off_pes
+        pb_on_throughput_per_pe = pb_on_throughput / pb_on_pes
+        result['throughput_per_pe_speedup'] = pb_on_throughput_per_pe / pb_off_throughput_per_pe
+        
+        results.append(result)
+    
+    # Add fd benchmark from perf_results (non-unrolled, streaming_latency=400, fifo_size=8)
+    fd_data = perf_df[(perf_df['testname'] == 'fd') & 
+                      (perf_df['fifo_size'] == fifo_size) & 
+                      (perf_df['streaming_latency'] == streaming_latency) &
+                      (perf_df['size'] == dataset_size) &
+                      (perf_df['LOOKAHEAD'] == 1) & 
+                      (perf_df['FIFO'] == 1)]
+    
+    fd_pb_off = fd_data[fd_data['PB'] == 0]
+    fd_pb_on = fd_data[fd_data['PB'] == 1]
+    
+    if len(fd_pb_off) > 0 and len(fd_pb_on) > 0:
+        fd_trip_count = fd_pb_off['trip_count'].values[0]
+        
+        fd_pb_off_throughput = fd_trip_count / fd_pb_off['execution_cycles'].values[0]
+        fd_pb_off_pes = fd_pb_off['dfg_size'].values[0]
+        
+        fd_pb_on_throughput = fd_trip_count / fd_pb_on['execution_cycles'].values[0]
+        fd_pb_on_pes = fd_pb_on['dfg_size'].values[0]
+        
+        fd_result = {
+            'testname': 'fd',
+            'pb_off_throughput': fd_pb_off_throughput,
+            'pb_off_pes': fd_pb_off_pes,
+            'pb_on_throughput': fd_pb_on_throughput,
+            'pb_on_pes': fd_pb_on_pes,
+            'unroll_factor': 'none',
+            'throughput_speedup': fd_pb_on_throughput / fd_pb_off_throughput,
+            'throughput_per_pe_speedup': (fd_pb_on_throughput / fd_pb_on_pes) / (fd_pb_off_throughput / fd_pb_off_pes)
+        }
+        results.append(fd_result)
+    
+    # Convert to dataframe
+    results_df = pd.DataFrame(results)
+    
+    # Define benchmark order
+    benchmark_order = ['ema', 'exp_decay', 'hp_filter', 'momentum_sgd', 'weighted_avg',
+                       'gaussian_cdf', 'gemm', 'mvt', 'sep', 'fd']
+    results_df['order'] = results_df['testname'].apply(
+        lambda x: benchmark_order.index(x) if x in benchmark_order else 999
+    )
+    results_df = results_df.sort_values('order').drop('order', axis=1)
+    
+    # Round speedups to 2 decimal places for the CSV
+    results_df['throughput_speedup'] = results_df['throughput_speedup'].round(2)
+    results_df['throughput_per_pe_speedup'] = results_df['throughput_per_pe_speedup'].round(2)
+    
+    # Save to CSV
+    output_file = os.path.join(output_dir, 'pipeline_balancing_impact.csv')
+    results_df.to_csv(output_file, index=False)
+    
+    # Compute and print averages
+    avg_throughput_speedup = results_df['throughput_speedup'].mean()
+    avg_throughput_per_pe_speedup = results_df['throughput_per_pe_speedup'].mean()
+    
+    print(f"\nGenerated pipeline balancing impact data:")
+    print(f"  - pipeline_balancing_impact.csv")
+    print(f"  Average throughput speedup: {avg_throughput_speedup:.2f}x")
+    print(f"  Average throughput per PE speedup: {avg_throughput_per_pe_speedup:.2f}x")
+    print(results_df.to_string(index=False))
+
+
 if __name__ == '__main__':
     main()
     
@@ -463,3 +607,4 @@ if __name__ == '__main__':
     output_dir = os.path.join(project_dir, 'artifacts')
     generate_unroll_comparison(output_dir)
     generate_unroll_per_pe_comparison(output_dir)
+    generate_pipeline_balancing_impact(output_dir)

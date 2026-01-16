@@ -429,5 +429,28 @@ conv5x5 & 25$\to$1 & 120 & 68 & 68 & 16 & 64 & 12 \\
 
 The results demonstrate that FIFO initialization enables highly efficient sliding-window optimization compared to the PHI-only approach. Most notably, FIFO initialization dramatically reduces the number of PEs required. For \texttt{jacobi2d}, the DFG shrinks from 39 nodes to just 10 nodes compared to the phi node implementation which is a 3.9$\times$ reduction, while still achieving the same 5$\to$1 load reduction. The benefits are even more pronounced for larger stencils: \texttt{conv5x5} reduces from 120 nodes to 68 nodes (1.8$\times$), making the sliding-window optimization feasible with only the FIFO initialization approach. Larger FIFO sizes (16 vs.\ 8) provide additional modest reductions by eliminating buffer PEs needed when reuse distances exceed FIFO depth.
 
-\subsection{Area and Power Overehad of FIFO Initialization}
+\subsection{Area and Power Overhead of FIFO Initialization}
 \label{subsec:area-power-overhead}
+
+To evaluate the hardware cost of FIFO initialization support, we synthesized both the baseline CGRA and the FIFO initialization-enabled CGRA using Synopsys Design Compiler with the NanGate 15nm OCL library at 1~GHz. Table~\ref{tab:area-power} summarizes the area and power overhead.
+
+\begin{table}[h]
+\centering
+\caption{Area and Power Comparison (15nm, 1~GHz)}
+\label{tab:area-power}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Metric} & \textbf{Baseline} & \textbf{FIFO Init} & \textbf{Overhead} \\
+\hline
+Total Cell Area ($\mu$m$^2$) & 499,537 & 505,748 & 1.24\% \\
+Combinational Area ($\mu$m$^2$) & 270,497 & 273,510 & 1.11\% \\
+Sequential Area ($\mu$m$^2$) & 229,040 & 232,238 & 1.40\% \\
+\hline
+Total Power (mW) & 122.97 & 128.62 & 4.59\% \\
+Dynamic Power (mW) & 106.25 & 111.69 & 5.13\% \\
+Leakage Power (mW) & 16.73 & 16.95 & 1.32\% \\
+\hline
+\end{tabular}
+\end{table}
+
+The results show that FIFO initialization incurs minimal hardware overhead. The area increase is only 1.24\%, primarily from the additional control logic and multiplexers required to support FIFO pre-loading during configuration. The power overhead of 4.59\% is similarly modest. These small overheads are justified by the significant performance improvements demonstrated in the previous sections, where FIFO initialization enables up to 12.7$\times$ throughput improvement for loop-carried dependences and dramatic PE reductions for stencil applications.

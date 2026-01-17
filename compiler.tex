@@ -1,5 +1,5 @@
 \section{Compiler Support}
 \label{sec:compiler}
-To leverage FIFO initialization, we built a compiler toolchain using both MLIR \cite{} and LLVM \cite{} that can identify loop-carried dependences in high-level code and apply optimizations described in Section \ref{sec:optimization}. It prduces a DFG that can be mapped onto our CGRA architecture with FIFO initialization support. The overall compilation flow is shown in Figure \ref{fig:compiler_flow}.
+To leverage FIFO initialization, we built a compiler toolchain using both MLIR \cite{lattner2021mlir} and LLVM \cite{lattner2004llvm} that can identify loop-carried dependences in high-level code and apply optimizations described in Section \ref{sec:optimization}. It prduces a DFG that can be mapped onto our CGRA architecture with FIFO initialization support. The overall compilation flow is shown in Figure \ref{fig:compiler_flow}.
 
 
